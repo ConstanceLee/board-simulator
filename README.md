@@ -62,7 +62,7 @@ You can also use features from the [ADK](https://adk.dev/) CLI with `uv run adk`
 |---------|--------------|
 | `agents-cli scaffold enhance` | Add CI/CD pipelines and Terraform infrastructure |
 | `agents-cli infra cicd` | One-command setup of entire CI/CD pipeline + infrastructure |
-| `agents-cli scaffold upgrade` | Auto-upgrade to latest version while preserving customizations |
+| `agents-cli scaffold upgrade` | Auto-upgrade to latest version while preserving customisations |
 
 ---
 

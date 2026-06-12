@@ -97,7 +97,8 @@ class BoardSimulator(BaseAgent):
             "Generate a clean, detailed, and comprehensive Markdown reference file "
             "profiling all the Woolworths Group Board of Directors from this PDF. "
             "For each board member, include their full name, role, appointed tenure, "
-            "career background, key strategic focus areas, and known biases or perspectives."
+            "career background, key strategic focus areas, and known biases or perspectives. "
+            "The generated reference file must be written strictly in Australian English, avoiding all American spellings."
         )
         
         response = client.models.generate_content(
@@ -318,9 +319,9 @@ Use the following guidelines to ensure accuracy:
 Submission Content:
 {board_paper_text}
 
-Analyze the submission and output a valid JSON object matching the requested schema.
+Analyse the submission and output a valid JSON object matching the requested schema.
 The reasoning must be written in a soft, professional, and measured tone, using a cautious confidence level (e.g. using hedging language like 'may', 'could', 'appears to', 'seems to indicate').
-Provide your reasoning strictly in Australian English (e.g. using 'organisation', 'remediation', 'behaviour', 'programme', 'summarise', 'categorise', 'prioritise', 'modelling' and avoiding American spellings like 'organization', 'behavior', 'program', 'summarize', 'categorize', 'prioritize', 'modeling').
+Provide your reasoning strictly in Australian English. You must never use American English spellings under any circumstances (e.g., always use 'organisation', 'labour', 'behaviour', 'programme', 'summarise', 'categorise', 'prioritise', 'modelling', 'analysing' and strictly avoid 'organization', 'labor', 'behavior', 'program', 'summarize', 'categorize', 'prioritize', 'modeling', 'analyzing').
 """
             client = self._get_client()
             try:
@@ -383,7 +384,7 @@ Provide your reasoning strictly in Australian English (e.g. using 'organisation'
             author=self.name,
             content=types.Content(
                 role="model",
-                parts=[types.Part.from_text(text="Analyzing baseline board profiles and starting Director Persona Simulations...")]
+                parts=[types.Part.from_text(text="Analysing baseline board profiles and starting Director Persona Simulations...")]
             )
         )
         
@@ -464,7 +465,7 @@ STRICT NUMERICAL REFERENCES RULE:
 If the board paper contains financial results or numeric targets, you MUST extract and reference specific numerical data points (percentages, dollar figures, basis point movements) in your rationale and questions. Generic observations are not allowed.
 WARWICK BRAY SPECIFICS: If you are Warwick Bray, you MUST query specific line items and reference numerical values (basis points, dollar amounts, percentage movements) from the board paper. Do not ask thematic questions.
 
-Provide your response strictly in Australian English. Use spelling like 'organisation', 'remediation', 'behaviour', 'programme', 'summarise', 'categorise', 'modelling', 'prioritise', 'licence', 'labour', 'centre'. Avoid American English spelling entirely (do NOT use 'organization', 'behavior', 'program', 'summarize', 'categorize', 'modeling', 'prioritize', 'license', 'labor', 'center').
+Provide your response strictly in Australian English. You must never use American English spellings under any circumstances (e.g., always use 'organisation', 'labour', 'behaviour', 'programme', 'summarise', 'categorise', 'prioritise', 'modelling', 'analysing', 'licence', 'centre' and strictly avoid 'organization', 'labor', 'behavior', 'program', 'summarize', 'categorize', 'prioritize', 'modeling', 'analyzing', 'license', 'center').
 Provide your response as a structured JSON matching this schema:
 {{
   "name": "{name}",
@@ -506,7 +507,7 @@ Provide your response as a structured JSON matching this schema:
             author=self.name,
             content=types.Content(
                 role="model",
-                parts=[types.Part.from_text(text="📊 Synthesizing final board dynamics, vulnerabilities, and executive recommendations...")]
+                parts=[types.Part.from_text(text="📊 Synthesising final board dynamics, vulnerabilities, and executive recommendations...")]
             )
         )
 
@@ -515,7 +516,7 @@ Provide your response as a structured JSON matching this schema:
 
         synthesis_prompt = f"""
 You are the Woolworths Group Virtual Board Paper Reviewer.
-You are synthesizing the results of the board simulation for the submitted board paper.
+You are synthesising the results of the board simulation for the submitted board paper.
 
 Board Paper Text:
 {board_paper_text}
@@ -555,7 +556,7 @@ Do NOT recommend any of the following:
 Tone & Confidence Level:
 The tone of the entire synthesis report must be soft, measured, and professional. Frame all themes, vulnerabilities, tensions, and assessments with a softer confidence level, using appropriate hedging language (e.g., 'suggests', 'likely to encounter', 'might pose a challenge', 'appears to converge', rather than 'is', 'will fail', 'are in conflict'). Ensure that any criticisms or risks are presented constructively and neutrally.
 
-Provide the entire output strictly in Australian English. Use spelling like 'organisation', 'remediation', 'behaviour', 'programme', 'summarise', 'categorise', 'modelling', 'prioritise', 'licence', 'labour', 'centre'. Avoid American English spelling entirely (do NOT use 'organization', 'behavior', 'program', 'summarize', 'categorize', 'modeling', 'prioritize', 'license', 'labor', 'center').
+Provide the entire output strictly in Australian English. You must never use American English spellings under any circumstances (e.g., always use 'organisation', 'labour', 'behaviour', 'programme', 'summarise', 'categorise', 'prioritise', 'modelling', 'analysing', 'licence', 'centre' and strictly avoid 'organization', 'labor', 'behavior', 'program', 'summarize', 'categorize', 'prioritize', 'modeling', 'analyzing', 'license', 'center').
 Do not include any conversational introduction or meta-commentary. Start directly with "## Phase 3: Cross-Cutting Themes and Vulnerabilities".
 """
         
@@ -573,7 +574,7 @@ Do not include any conversational introduction or meta-commentary. Start directl
         md_lines = []
         md_lines.append("# Woolworths Group Board Simulation Report")
         md_lines.append(f"* **Simulation Date**: March 2026")
-        md_lines.append(f"* **Analyzed Board Paper**: `{ctx.session.state.get('board_paper_path') or uploaded_filename}`\n")
+        md_lines.append(f"* **Analysed Board Paper**: `{ctx.session.state.get('board_paper_path') or uploaded_filename}`\n")
         
         md_lines.append("## **Executive Stances Summary**\n")
         md_lines.append("| Board Member | Role | Simulated Stance |")
@@ -648,7 +649,7 @@ Do not include any conversational introduction or meta-commentary. Start directl
             )
         )
 
-# Initialize the root agent
+# Initialise the root agent
 root_agent = BoardSimulator(name="board_simulator")
 
 # Wrap in App

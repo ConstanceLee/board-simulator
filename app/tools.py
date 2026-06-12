@@ -260,12 +260,12 @@ def search_member_news(name: str, query: str) -> Dict[str, Any]:
     fallback_database = {
         "Scott Perkins": [
             "Scott Perkins advocates for strategic clarity and values customer trust. Rebuilding trust is a major focus.",
-            "Perkins emphasized the recent CEO transition was independent and orderly.",
+            "Perkins emphasised the recent CEO transition was independent and orderly.",
             "Dual roles as chair of Woolworths and Origin Energy provide perspectives on decarbonisation, ESG, and public scrutiny."
         ],
         "Amanda Bardwell": [
             "Amanda Bardwell, architect of WooliesX, champions e-commerce, loyalty, and digital innovation.",
-            "Bardwell notes online grocery margins are thinner, emphasizing operational efficiency to improve profitability.",
+            "Bardwell notes online grocery margins are thinner, emphasising operational efficiency to improve profitability.",
             "She is highly customer-focused and values data-driven decision making."
         ],
         "Maxine Brenner": [
@@ -286,12 +286,12 @@ def search_member_news(name: str, query: str) -> Dict[str, Any]:
         "Kathee Tesija": [
             "Kathee Tesija brings mass-market merchandising and supply chain expertise from Target US.",
             "She focuses on store layout integration, private label development, and global product sourcing.",
-            "Tesija supports omnichannel scaling and inventory optimization."
+            "Tesija supports omnichannel scaling and inventory optimisation."
         ],
         "Warwick Bray": [
             "Warwick Bray brings strict financial discipline (former Telstra CFO) to technology and capital investment ROI.",
-            "He heavily scrutinizes digital projects for financial viability and performance metrics.",
-            "Bray supports data-democratization inside organizations to improve agility."
+            "He heavily scrutinises digital projects for financial viability and performance metrics.",
+            "Bray supports data-democratisation inside organisations to improve agility."
         ],
         "Ken Meyer": [
             "Ken Meyer brings deep operational food retail expertise from Whole Foods Market (EVP of Operations).",
