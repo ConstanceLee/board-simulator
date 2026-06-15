@@ -15,7 +15,8 @@
 import os
 
 import google.auth
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as google_cloud_logging
 
@@ -45,6 +46,7 @@ app: FastAPI = get_fast_api_app(
     artifact_service_uri=artifact_service_uri,
     allow_origins=allow_origins,
     session_service_uri=session_service_uri,
+    use_local_storage=False,
     otel_to_cloud=True,
 )
 app.title = "board-simulator"
@@ -63,6 +65,29 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     """
     logger.log_struct(feedback.model_dump(), severity="INFO")
     return {"status": "success"}
+
+
+@app.get("/download_artifact/{filename}")
+def download_artifact(filename: str) -> FileResponse:
+    """Download a generated simulation report file directly."""
+    # Prevent directory traversal attacks
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(AGENT_DIR, "app", "artifacts", safe_filename)
+    
+    logger.log_struct({
+        "message": f"Requested download for artifact: '{safe_filename}'",
+        "resolved_path": file_path
+    }, severity="INFO")
+    
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        logger.log_struct({"message": f"Serving file: {file_path}"}, severity="INFO")
+        return FileResponse(
+            path=file_path,
+            filename=safe_filename,
+            media_type="application/octet-stream"
+        )
+    logger.log_struct({"message": f"File not found on disk: {file_path}"}, severity="ERROR")
+    raise HTTPException(status_code=404, detail="Requested report file not found")
 
 
 # Main execution

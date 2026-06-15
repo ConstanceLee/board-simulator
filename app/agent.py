@@ -17,6 +17,7 @@ from google import genai
 from google.genai import types
 
 from app.tools import extract_board_paper_async, search_member_news
+from app.app_utils.docx_exporter import build_board_simulation_docx
 
 logger = logging.getLogger("board-simulator.agent")
 
@@ -137,9 +138,107 @@ class BoardSimulator(BaseAgent):
                         board_paper_path = uploaded_filename
         user_message = user_message.strip()
 
+        # Check if user message is a valid file path or GCS path
+        is_file_path = False
+        potential_path = user_message.strip()
+        if potential_path:
+            if "gs://" in potential_path:
+                is_file_path = True
+            elif os.path.exists(potential_path):
+                is_file_path = True
+
+        if uploaded_filename or is_file_path:
+            # We are starting a new simulation, clear previous report and states
+            ctx.session.state["report_md_filename"] = ""
+            ctx.session.state["phase1_approved"] = False
+            ctx.session.state["awaiting_approval"] = False
+            ctx.session.state["extracted_text_filename"] = ""
+            ctx.session.state["file_type"] = ""
+            ctx.session.state["board_paper_path"] = ""
+
         # Check session states
         phase1_approved = ctx.session.state.get("phase1_approved", False)
         awaiting_approval = ctx.session.state.get("awaiting_approval", False)
+
+        # Only check conversational fallback if we are not in the middle of active simulation phases
+        if not phase1_approved and not awaiting_approval:
+            if not uploaded_filename and not is_file_path:
+                report_md_filename = ctx.session.state.get("report_md_filename", "")
+                if report_md_filename:
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(
+                            role="model",
+                            parts=[types.Part.from_text(text="Processing your request...")]
+                        )
+                    )
+                    
+                    # Load report md on-demand
+                    report_md = ""
+                    if ctx.artifact_service:
+                        try:
+                            artifact_part = await ctx.artifact_service.load_artifact(
+                                app_name=ctx.app_name,
+                                user_id=ctx.user_id,
+                                session_id=ctx.session.id,
+                                filename=report_md_filename
+                            )
+                            if artifact_part and artifact_part.inline_data:
+                                report_md = artifact_part.inline_data.data.decode("utf-8")
+                        except Exception as e:
+                            logger.error(f"Failed to load report markdown artifact: {e}")
+                            
+                    if not report_md:
+                        report_md = "Report content could not be loaded."
+                        
+                    chat_prompt = f"""
+You are the Woolworths Group Virtual Board Paper Reviewer, an expert in ASX corporate governance.
+The user is asking a question or giving a command regarding the board simulation report that was generated.
+
+Generated Report:
+{report_md}
+
+User Message:
+{user_message}
+
+                    Please respond to the user's message in a professional, helpful tone using Australian English.
+                    If the user asks to download, export, or access the docx/Word document report, inform them that both files are ready for download, and you MUST provide these clickable links at the very bottom of your response:
+                    Download file: **[Woolworths_Board_Simulation_Report.docx](/download_artifact/Woolworths_Board_Simulation_Report.docx)**
+                    Download file: **[Woolworths_Board_Simulation_Report.md](/download_artifact/Woolworths_Board_Simulation_Report.md)**
+                    """
+                    client = self._get_client()
+                    try:
+                        response = client.models.generate_content(
+                            model="gemini-3.5-flash",
+                            contents=chat_prompt
+                        )
+                        
+                        yield Event(
+                            author=self.name,
+                            content=types.Content(
+                                role="model",
+                                parts=[types.Part.from_text(text=response.text or "")]
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"Conversational chat response failed: {e}")
+                        yield Event(
+                            author=self.name,
+                            content=types.Content(
+                                role="model",
+                                parts=[types.Part.from_text(text=f"❌ Error: {e}")]
+                            )
+                        )
+                    return
+                else:
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(
+                            role="model",
+                            parts=[types.Part.from_text(text="Welcome! Please upload a board paper (PDF or PPTX) to start the board simulation.")]
+                        )
+                    )
+                    return
 
         # -------------------------------------------------------------
         # STATEFUL TURN CONTROLLER
@@ -570,11 +669,32 @@ Do not include any conversational introduction or meta-commentary. Start directl
             logger.error(f"Synthesis generation failed: {e}")
             synthesis_markdown = "## Error during synthesis generation."
 
-        # Collate Phase 2 results into Markdown
+        # Collate Stage 1-4 results into Markdown
         md_lines = []
         md_lines.append("# Woolworths Group Board Simulation Report")
-        md_lines.append(f"* **Simulation Date**: March 2026")
+        
+        # Dynamic date for header
+        from datetime import datetime
+        now = datetime.now()
+        date_str = f"{now.day} {now.strftime('%B %Y')}"
+        
+        md_lines.append(f"* **Simulation Date**: {date_str}")
         md_lines.append(f"* **Analysed Board Paper**: `{ctx.session.state.get('board_paper_path') or uploaded_filename}`\n")
+        
+        # Append Phase 1 Intake & Classification
+        p1_data = ctx.session.state.get("phase1_data", {})
+        if p1_data:
+            classification = p1_data.get("classification", "Unknown")
+            committees_list = ", ".join(p1_data.get("committees", []))
+            sensitivity = p1_data.get("sensitivity", "Medium")
+            reasoning = p1_data.get("reasoning", "No detailed reasoning provided.")
+            
+            md_lines.append("## **Phase 1: Intake & Classification**\n")
+            md_lines.append(f"* **Proposal Classification**: *{classification.title()}*")
+            md_lines.append(f"* **Target Committees**: *{committees_list}*")
+            md_lines.append(f"* **Governance Sensitivity**: **{sensitivity.title()}**")
+            md_lines.append(f"* **Governance Rationale**: {reasoning}\n")
+            md_lines.append("---\n")
         
         md_lines.append("## **Executive Stances Summary**\n")
         md_lines.append("| Board Member | Role | Simulated Stance |")
@@ -620,32 +740,93 @@ Do not include any conversational introduction or meta-commentary. Start directl
         # Save output locally as an artifact
         artifacts_dir = os.path.join(current_dir, "artifacts")
         os.makedirs(artifacts_dir, exist_ok=True)
-        report_path = os.path.join(artifacts_dir, "board_simulation_report.md")
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(report_md)
+        report_docx_filename = "Woolworths_Board_Simulation_Report.docx"
+        report_md_filename = "Woolworths_Board_Simulation_Report.md"
+        
+        docx_version = None
+        md_version = None
+        
+        # 1. Save Markdown report locally and via artifact service
+        report_md_path = os.path.join(artifacts_dir, report_md_filename)
+        try:
+            with open(report_md_path, "w", encoding="utf-8") as f:
+                f.write(report_md)
+            logger.info(f"Saved Markdown report locally to {report_md_path}")
+        except Exception as e:
+            logger.error(f"Failed to save Markdown report locally: {e}")
             
-        # Clean session state variables to allow starting over
+        if ctx.artifact_service:
+            try:
+                md_part = types.Part.from_bytes(data=report_md.encode("utf-8"), mime_type="text/markdown")
+                md_version = await ctx.artifact_service.save_artifact(
+                    app_name=ctx.app_name,
+                    user_id=ctx.user_id,
+                    session_id=ctx.session.id,
+                    filename=report_md_filename,
+                    artifact=md_part
+                )
+                logger.info(f"Registered markdown report artifact: {report_md_filename} (v{md_version})")
+            except Exception as e:
+                logger.error(f"Failed to register markdown report artifact: {e}")
+            
+        # 2. Save Word report via artifact service
+        try:
+            report_docx_bytes = build_board_simulation_docx(
+                board_paper_name=ctx.session.state.get('board_paper_path') or uploaded_filename,
+                simulated_members=simulated_members,
+                synthesis_markdown=synthesis_markdown
+            )
+            report_docx_path = os.path.join(artifacts_dir, report_docx_filename)
+            with open(report_docx_path, "wb") as f:
+                f.write(report_docx_bytes)
+                
+            if ctx.artifact_service:
+                docx_part = types.Part.from_bytes(data=report_docx_bytes, mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                docx_version = await ctx.artifact_service.save_artifact(
+                    app_name=ctx.app_name,
+                    user_id=ctx.user_id,
+                    session_id=ctx.session.id,
+                    filename=report_docx_filename,
+                    artifact=docx_part
+                )
+            logger.info(f"Saved report as Word document (.docx) and registered as session artifact (v{docx_version})")
+        except Exception as e:
+            logger.error(f"Failed to generate Word document report: {e}")
+            
+        # Keep report_md_filename in state so we can load it on-demand
+        ctx.session.state["report_md_filename"] = report_md_filename
         ctx.session.state["phase1_approved"] = False
         ctx.session.state["awaiting_approval"] = False
-        ctx.session.state["extracted_text_filename"] = ""
-        ctx.session.state["file_type"] = ""
-        ctx.session.state["board_paper_path"] = ""
         
+        # Populate artifact_delta with versions of both files
+        artifact_delta = {}
+        if docx_version is not None:
+            artifact_delta[report_docx_filename] = docx_version
+        if md_version is not None:
+            artifact_delta[report_md_filename] = md_version
+            
+        # Build event parts containing only text (detailed report + download links at the bottom)
+        report_text = f"""{report_md}
+
+---
+
+Download file: **[Woolworths_Board_Simulation_Report.docx](/download_artifact/{report_docx_filename})**
+Download file: **[Woolworths_Board_Simulation_Report.md](/download_artifact/{report_md_filename})**"""
+
         # Yield the final report
         yield Event(
             author=self.name,
             content=types.Content(
                 role="model",
-                parts=[types.Part.from_text(text=f"### board_simulation_report.md generated successfully!\n\n{report_md}")]
+                parts=[types.Part.from_text(text=report_text)]
             ),
             actions=EventActions(
                 state_delta={
                     "phase1_approved": False,
                     "awaiting_approval": False,
-                    "extracted_text_filename": "",
-                    "file_type": "",
-                    "board_paper_path": ""
-                }
+                    "report_md_filename": report_md_filename
+                },
+                artifact_delta=artifact_delta
             )
         )
 
