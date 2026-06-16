@@ -7,7 +7,7 @@
 | Board Member | Role | Simulated Stance |
 | --- | --- | --- |
 | **Scott Perkins** | Independent Chair of the Board | ⚠️ **Conditionally Supportive** |
-| **Amanda Bardwell** | Chief Executive Officer (CEO) | ✅ **Supportive** |
+| **Amanda Bardwell** | Chief Executive Officer (CEO) | ⚠️ **Conditionally Supportive** |
 | **Maxine Brenner** | Non-Executive Director (Risk & Gov) | ⚠️ **Conditionally Supportive** |
 | **Jennifer Carr-Smith** | Non-Executive Director (E-commerce) | ⚠️ **Conditionally Supportive** |
 | **Philip Chronican** | Non-Executive Director (Governance) | ⚠️ **Conditionally Supportive** |

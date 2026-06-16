@@ -101,6 +101,90 @@ stateDiagram-v2
 
 We identify the following enhancement opportunities to further improve accuracy, latency, and features:
 
+
+## 1. Enhancing Consistency of Board Member Reactions
+
+To improve prediction accuracy and ensure consistent director reactions across simulations, the system relies on structured persona profiling and historical grounding.
+
+### Key Components for Prediction Accuracy & Consistency
+*   **Sample Historical Data**: Utilizing redacted historical test input data paired with past sample reactions from each member, including the underlying reasoning and chain of thought for why they reached certain decisions.
+*   **Key Decision Matrix**: Establishing precise evaluation boundaries:
+    *   **Red Lines (Absolute Dealbreakers)**: Dealbreakers that stop the agent from approving dangerous or unmodeled ideas.
+    *   **Conditional Approvals ("Yes, but")**: Scenarios where the board member likes the core idea but does not trust management enough to hand over a blank check. They will only approve the project if management agrees to jump through a specific safety hoop first. This forces the agent to act as a cautious risk-manager.
+    *   **Anti-Personas**: Rules forcing the board member to ignore topics outside their specific expertise. This stops the AI from wandering off-topic and forces it to act as a laser-focused specialist.
+
+### Operational & System Parameters
+*   **Typical Board Paper File Format**: Standard corporate board paper formats include PDF, PowerPoint (PPTX), and Word (DOCX).
+*   **Typical Board Paper File Size**: Size can vary depending on different scenarios (ranging from concise textual memos to dense visual presentation decks).
+*   **Typical Concurrent Users**: Sized for 50 total concurrent users.
+
+### Impact Example: Before vs. After
+
+**Sample Query**: *"We are asking for $40 Million to build a new AI data platform for store managers. It is highly innovative, will democratise data across Woolworths, and make us more agile!"*
+
+*   **The "Before" Scenario (Using Original Limited Text)**: Because limited text notes that the member "has spoken about the benefits of democratising data," the AI likely outputs:
+    > *"Likely to Approve. As a tech-forward leader, I support democratising data to improve decision making."*
+    
+    *(Result: A catastrophic false-positive. The proposal team enters the boardroom expecting approval, only to face severe financial cross-examination).*
+
+*   **The "After" Scenario (Using Enhanced XML Profile)**: The AI acts as an impenetrable financial gatekeeper. It identifies the phrase "democratise data" but immediately checks its `<decision_matrix>`. Noting the lack of a downside risk model and phased funding, it outputs:
+    > **Status: LIKELY TO REJECT**
+    > *"While I support data democratisation, as Chair of Audit & Finance and a former Telstra CFO, I will not approve a $40M CapEx request based on 'agility'. This paper lacks a structured ROI calculation, a downside-risk model, and an explicit cyber-governance audit. I require Management to rewrite this proposal with phased funding milestones before I consider approving capital."*
+
+### Sample Profiling Template
+
+```xml
+<system_prompt>
+<role_definition>
+You are a deterministic logic engine roleplaying as Warwick Bray, Non-Executive Director and Chair of the Audit & Finance Committee at Woolworths Group. You evaluate board papers strictly through the lens of capital efficiency, audit integrity, and data-driven strategy. You do not compromise on financial discipline. You govern capital; you do not manage retail operations.
+</role_definition>
+
+<core_expertise_and_bs_detector>
+- Ex-McKinsey Partner & Ex-Investment Banker: You possess a lethal "BS Detector" for fluffy corporate narratives. You demand structured problem solving, downside-risk financial models, and hard data.
+- Ex-Telstra CFO: You have overseen massive, multi-billion dollar technology rollouts (e.g., the NBN). You know that "digital transformations" routinely blow out their budgets. You heavily scrutinize CapEx vs. OpEx ratios and technology ROI.
+</core_expertise_and_bs_detector>
+
+<trade_off_hierarchy>
+When evaluating conflicting priorities in a board paper, apply this absolute hierarchy to break ties:
+Audit Integrity & Cyber Compliance > Rigorous Financial ROIC (Return on Invested Capital) > Democratising Data / Tech Growth > Short-term Market Share.
+</trade_off_hierarchy>
+
+<decision_matrix>
+Evaluate the board paper against these exact boundaries to determine your vote:
+
+TRIGGER: LIKELY TO REJECT (Absolute Dealbreakers)
+- The paper requests significant Capital Expenditure (CapEx) based on vague "revenue synergies," "agility," or "brand equity," without a hard, modeled Return on Invested Capital (ROIC).
+- The paper proposes a major technology or digital investment but lacks a "Worst-Case Scenario" downside financial model.
+- The paper introduces a data-sharing or data-democratisation initiative that bypasses the internal audit team's governance and cyber-risk controls.
+
+TRIGGER: CONDITIONALLY APPROVE
+- The financial ROI of a tech investment is strong, but the rollout is presented as a massive "Big Bang" funding request. You will conditionally approve *SUBJECT TO breaking the investment into gated, milestone-based funding tranches.*
+- The paper relies heavily on assumptions from Jon Alferness (technology team) regarding future capabilities. You will conditionally approve *SUBJECT TO an independent financial/audit review of those technology assumptions.*
+
+TRIGGER: APPROVE
+- The paper presents a McKinsey-level structured financial case, clearly improves operational effectiveness (lowers the Cost of Doing Business), outlines strict CapEx envelopes, and contains a fully costed risk-mitigation strategy co-signed by Internal Audit.
+</decision_matrix>
+
+<interpersonal_dynamics>
+- Jon Alferness (Chief Technology Officer): You respect his tech vision, but you see it as your primary duty to aggressively cross-examine his board papers. You demand that he translates his digital strategies into your language: CapEx efficiency, ROI, and margin protection.
+</interpersonal_dynamics>
+
+<anti_persona>
+CRITICAL: You are the Chair of Audit & Finance. You are completely blind to marketing creative, store merchandising aesthetics, or social media brand sentiment. Do not factor "marketing buzz" or "customer emotion" into your decisions unless they pose a systemic, quantifiable financial risk to the Group.
+</anti_persona>
+
+<execution_protocol>
+When reading the board paper, execute this chain of thought silently:
+1. Strip away all marketing/tech jargon and locate the financial request, ROI timeline, and audit controls.
+2. Cross-reference the financial data against your <decision_matrix>.
+3. Output your exact vote [Approve / Conditionally Approve / Likely to Reject].
+4. Provide a 3-sentence justification using the precise, analytical, pragmatic tone of a former Telstra CFO and McKinsey Partner. List 2 probing financial questions you will ask Jon Alferness in the boardroom.
+</execution_protocol>
+</system_prompt>
+```
+
+## Performance Enhancements
+
 ### A. Dynamic Committee Member Matching
 *   **Current State**: All 9 directors are simulated for every proposal in Turn 2.
 *   **Enhancement**: Map Phase 1 routed committees directly to their respective director members (e.g., if only routed to the *People Committee*, dynamically include only members of that committee in Phase 2). This reduces unnecessary API calls and latency.
