@@ -98,7 +98,7 @@ async def test_board_simulator_workflow() -> None:
         assert final_event_t1.content is not None
         text_t1 = final_event_t1.content.parts[0].text
         assert "Phase 1: Intake & Classification" in text_t1
-        assert "Shall I proceed with the full simulation?" in text_t1
+        assert "Confirm or reply to proceed with the full Director Persona Simulations." in text_t1
         
         # Verify state is updated to awaiting approval
         assert ctx_t1.session.state.get("awaiting_approval") is True
@@ -227,3 +227,148 @@ async def test_board_simulator_chat_fallback() -> None:
     assert len(events) == 2
     assert "Processing your request..." in events[0].content.parts[0].text
     assert "You can download the board_simulation_report.docx" in events[1].content.parts[0].text
+
+
+@pytest.mark.asyncio
+async def test_board_simulator_workflow_ge_tag() -> None:
+    """Test the stateful board simulator workflow using the Gemini Enterprise XML tag format."""
+    session_service = InMemorySessionService()
+    await session_service.create_session(
+        app_name="app",
+        user_id="test_user",
+        session_id="session_456"
+    )
+    
+    artifact_service = InMemoryArtifactService()
+    # Save a fake PDF file as an artifact
+    part = types.Part(
+        inline_data=types.Blob(mime_type="application/pdf", data=b"fake-pdf-data")
+    )
+    await artifact_service.save_artifact(
+        app_name="app",
+        user_id="test_user",
+        session_id="session_456",
+        filename="board_paper.pdf",
+        artifact=part
+    )
+    
+    # Use the GE style start_of_user_uploaded_file tag
+    user_content_t1 = types.Content(
+        role="user",
+        parts=[types.Part(text='<start_of_user_uploaded_file: board_paper.pdf>\n\n<end_of_user_uploaded_file: board_paper.pdf>')]
+    )
+    
+    agent = BoardSimulator(name="board_simulator")
+    agent._get_profiles_content = MagicMock(return_value="Board Member Baseline Profiles")
+    
+    mock_genai_client = MagicMock()
+    mock_response_p1 = MagicMock()
+    mock_response_p1.text = json.dumps({
+        "reasoning": "Strategic proposal routing to Risk Committee.",
+        "classification": "strategic proposal",
+        "committees": ["Risk Committee"],
+        "sensitivity": "medium"
+    })
+    
+    mock_genai_client.models.generate_content.return_value = mock_response_p1
+    agent._get_client = MagicMock(return_value=mock_genai_client)
+    
+    session = await session_service.get_session(app_name="app", user_id="test_user", session_id="session_456")
+    ctx_t1 = InvocationContext(
+        session_service=session_service,
+        artifact_service=artifact_service,
+        invocation_id="inv_t1",
+        agent=agent,
+        user_content=user_content_t1,
+        session=session
+    )
+    
+    mock_extraction_result = {
+        "status": "success",
+        "file_type": "pdf",
+        "text": "Fake extracted board paper text containing financials."
+    }
+    
+    with patch("app.agent.extract_board_paper_async", new_callable=AsyncMock) as mock_extract:
+        mock_extract.return_value = mock_extraction_result
+        
+        events_t1 = []
+        async for event in agent._run_async_impl(ctx_t1):
+            events_t1.append(event)
+            
+        mock_extract.assert_called_once_with(file_bytes=b"fake-pdf-data", filename="board_paper.pdf")
+        assert len(events_t1) > 0
+        final_event_t1 = events_t1[-1]
+        assert final_event_t1.content is not None
+        text_t1 = final_event_t1.content.parts[0].text
+        assert "Phase 1: Intake & Classification" in text_t1
+        assert "Confirm or reply to proceed with the full Director Persona Simulations." in text_t1
+        
+        assert ctx_t1.session.state.get("awaiting_approval") is True
+        assert ctx_t1.session.state.get("extracted_text_filename") == "extracted_text_session_456.txt"
+
+
+@pytest.mark.asyncio
+async def test_board_simulator_workflow_ge_inline_text() -> None:
+    """Test the agent's ability to extract and process inline document text directly from the prompt tags, bypassing files."""
+    session_service = InMemorySessionService()
+    await session_service.create_session(
+        app_name="app",
+        user_id="test_user",
+        session_id="session_789"
+    )
+    
+    artifact_service = InMemoryArtifactService()
+    # Note: NO file is saved as an artifact in this test!
+    
+    user_content_t1 = types.Content(
+        role="user",
+        parts=[types.Part(text='<start_of_user_uploaded_file: inline_doc.pdf>\nThis is inline parsed text from the PDF file.\n<end_of_user_uploaded_file: inline_doc.pdf>')]
+    )
+    
+    agent = BoardSimulator(name="board_simulator")
+    agent._get_profiles_content = MagicMock(return_value="Board Member Baseline Profiles")
+    
+    mock_genai_client = MagicMock()
+    mock_response_p1 = MagicMock()
+    mock_response_p1.text = json.dumps({
+        "reasoning": "Strategic proposal classification.",
+        "classification": "strategic proposal",
+        "committees": ["Sustainability Committee"],
+        "sensitivity": "low"
+    })
+    
+    mock_genai_client.models.generate_content.return_value = mock_response_p1
+    agent._get_client = MagicMock(return_value=mock_genai_client)
+    
+    session = await session_service.get_session(app_name="app", user_id="test_user", session_id="session_789")
+    ctx_t1 = InvocationContext(
+        session_service=session_service,
+        artifact_service=artifact_service,
+        invocation_id="inv_t1",
+        agent=agent,
+        user_content=user_content_t1,
+        session=session
+    )
+    
+    with patch("app.agent.extract_board_paper_async", new_callable=AsyncMock) as mock_extract:
+        events_t1 = []
+        async for event in agent._run_async_impl(ctx_t1):
+            events_t1.append(event)
+            
+        # extract_board_paper_async should NEVER be called since text was extracted inline!
+        mock_extract.assert_not_called()
+        
+        assert len(events_t1) > 0
+        final_event_t1 = events_t1[-1]
+        text_t1 = final_event_t1.content.parts[0].text
+        assert "Phase 1: Intake & Classification" in text_t1
+        assert "Confirm or reply to proceed" in text_t1
+        
+        # State should be updated
+        assert ctx_t1.session.state.get("awaiting_approval") is True
+        # Verify the inline text was cached/saved
+        assert ctx_t1.session.state.get("inline_extracted_text") == "This is inline parsed text from the PDF file."
+        assert ctx_t1.session.state.get("inline_extracted_filename") == "inline_doc.pdf"
+
+

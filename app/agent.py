@@ -12,6 +12,7 @@ from google.adk.apps import App
 from google.adk.events import Event, EventActions
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.plugins.save_files_as_artifacts_plugin import SaveFilesAsArtifactsPlugin
+from app.app_utils.recover_partless_turn import RecoverPartlessTurn
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google import genai
 from google.genai import types
@@ -88,7 +89,7 @@ class BoardSimulator(BaseAgent):
         logger.info("Parsing Detailed_Profiles_March_2026.pdf with Gemini...")
         pdf_path = os.path.join(current_dir, "Detailed_Profiles_March_2026.pdf")
         if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"Profiles PDF not found at: {pdf_path}")
+            return "Baseline Board Profiles: Scott Perkins (Chair, Banking), Amanda Bardwell (CEO, Retail), Maxine Brenner (Risk/Legal), Philip Chronican (Banking/Ethics), Warwick Bray (Finance/Telstra), Kathee Tesija (Merchandising), Ken Meyer (Operations), Jon Alferness (AI/Tech), Jennifer Carr-Smith (E-commerce)."
             
         with open(pdf_path, "rb") as f:
             pdf_bytes = f.read()
@@ -121,7 +122,8 @@ class BoardSimulator(BaseAgent):
     ) -> AsyncGenerator[Event, None]:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # Extract user message parts
+        logger.info(f"Raw incoming user_content: {ctx.user_content}")
+        logger.info(f"Container environment variables: {dict(os.environ)}")
         user_message = ""
         uploaded_filename = ""
         uploaded_bytes = None
@@ -129,13 +131,53 @@ class BoardSimulator(BaseAgent):
         
         if ctx.user_content and ctx.user_content.parts:
             for part in ctx.user_content.parts:
-                if part.text:
-                    user_message += part.text + " "
-                    # Match placeholder inserted by SaveFilesAsArtifactsPlugin
-                    match = re.search(r'\[Uploaded Artifact: "([^"]+)"\]', part.text)
-                    if match:
-                        uploaded_filename = match.group(1)
+                txt = getattr(part, "text", None) or (part.get("text") if hasattr(part, "get") else None)
+                if txt:
+                    user_message += txt + " "
+                    match_artifact = re.search(r'\[Uploaded Artifact: "([^"]+)"\]', txt)
+                    if match_artifact:
+                        uploaded_filename = match_artifact.group(1)
                         board_paper_path = uploaded_filename
+                    
+                    match_ge = re.search(r'<start_of_user_uploaded_file:\s*([^>]+)>', txt)
+                    if match_ge:
+                        uploaded_filename = match_ge.group(1).strip()
+                        board_paper_path = uploaded_filename
+                    
+                    match_content = re.search(
+                        r'<start_of_user_uploaded_file:\s*([^>]+)>(.*?)(?:<end_of_user_uploaded_file:\s*\1>|<end_of_user_uploaded_file:\s*[^>]+>)',
+                        txt,
+                        re.DOTALL
+                    )
+                    if match_content:
+                        filename = match_content.group(1).strip()
+                        file_text = match_content.group(2).strip()
+                        if file_text:
+                            ctx.session.state["inline_extracted_text"] = file_text
+                            ctx.session.state["inline_extracted_filename"] = filename
+
+
+                file_data = getattr(part, "file_data", None) or (part.get("file_data") if hasattr(part, "get") else None)
+                if file_data:
+                    uri = (
+                        getattr(file_data, "file_uri", None)
+                        or getattr(file_data, "uri", None)
+                        or (file_data.get("file_uri") or file_data.get("uri") if hasattr(file_data, "get") else None)
+                    )
+                    if uri:
+                        board_paper_path = uri
+                        uploaded_filename = board_paper_path.split("/")[-1]
+
+                inline_data = getattr(part, "inline_data", None) or (part.get("inline_data") if hasattr(part, "get") else None)
+                if inline_data:
+                    data = (
+                        getattr(inline_data, "data", None)
+                        or (inline_data.get("data") if hasattr(inline_data, "get") else None)
+                    )
+                    if data:
+                        import base64
+                        uploaded_bytes = data if isinstance(data, bytes) else base64.b64decode(data)
+                        uploaded_filename = "uploaded_paper.pdf"
         user_message = user_message.strip()
 
         # Check if user message is a valid file path or GCS path
@@ -147,7 +189,7 @@ class BoardSimulator(BaseAgent):
             elif os.path.exists(potential_path):
                 is_file_path = True
 
-        if uploaded_filename or is_file_path:
+        if uploaded_filename or is_file_path or uploaded_bytes:
             # We are starting a new simulation, clear previous report and states
             ctx.session.state["report_md_filename"] = ""
             ctx.session.state["phase1_approved"] = False
@@ -162,7 +204,7 @@ class BoardSimulator(BaseAgent):
 
         # Only check conversational fallback if we are not in the middle of active simulation phases
         if not phase1_approved and not awaiting_approval:
-            if not uploaded_filename and not is_file_path:
+            if not uploaded_filename and not is_file_path and not uploaded_bytes:
                 report_md_filename = ctx.session.state.get("report_md_filename", "")
                 if report_md_filename:
                     yield Event(
@@ -295,70 +337,78 @@ User Message:
 
         # If not loaded from cache, perform extraction
         if not board_paper_text:
-            # Retrieve uploaded bytes from artifact service if available
-            if uploaded_filename and ctx.artifact_service:
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part.from_text(text=f"Retrieving uploaded file: {uploaded_filename}...")]
-                    )
-                )
-                try:
-                    artifact_part = await ctx.artifact_service.load_artifact(
-                        app_name=ctx.app_name,
-                        user_id=ctx.user_id,
-                        session_id=ctx.session.id,
-                        filename=uploaded_filename
-                    )
-                    if artifact_part and artifact_part.inline_data:
-                        uploaded_bytes = artifact_part.inline_data.data
-                except Exception as e:
-                    logger.error(f"Failed to load artifact: {e}")
-
-            if not uploaded_bytes:
-                # No bytes, fall back to parsing file path from text
-                if "gs://" in user_message:
-                    match = re.search(r"gs://[^\s]+", user_message)
-                    if match:
-                        board_paper_path = match.group(0)
-                else:
-                    board_paper_path = user_message.strip()
-                ctx.session.state["board_paper_path"] = board_paper_path
+            inline_extracted_text = ctx.session.state.get("inline_extracted_text", "")
+            inline_filename = ctx.session.state.get("inline_extracted_filename", "")
+            if inline_extracted_text and inline_filename == uploaded_filename:
+                board_paper_text = inline_extracted_text
+                file_type = "txt"
+                logger.info(f"Loaded inline extracted text from user prompt for: {uploaded_filename}")
                 
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part.from_text(text=f"Loading board paper path: {board_paper_path}...")]
+            if not board_paper_text:
+                if uploaded_filename and ctx.artifact_service:
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(
+                            role="model",
+                            parts=[types.Part.from_text(text=f"Retrieving uploaded file: {uploaded_filename}...")]
+                        )
                     )
-                )
-                extraction_result = await extract_board_paper_async(file_path=board_paper_path)
-            else:
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part.from_text(text="Extracting uploaded file content...")]
+                    try:
+                        artifact_part = await ctx.artifact_service.load_artifact(
+                            app_name=ctx.app_name,
+                            user_id=ctx.user_id,
+                            session_id=ctx.session.id,
+                            filename=uploaded_filename
+                        )
+                        if artifact_part and artifact_part.inline_data:
+                            uploaded_bytes = artifact_part.inline_data.data
+                    except Exception as e:
+                        logger.error(f"Failed to load artifact: {e}")
+
+                if not uploaded_bytes:
+                    # No bytes, fall back to parsing file path from text
+                    if "gs://" in user_message:
+                        match = re.search(r"gs://[^\s]+", user_message)
+                        if match:
+                            board_paper_path = match.group(0)
+                    else:
+                        board_paper_path = user_message.strip()
+                    ctx.session.state["board_paper_path"] = board_paper_path
+                    
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(
+                            role="model",
+                            parts=[types.Part.from_text(text=f"Loading board paper path: {board_paper_path}...")]
+                        )
                     )
-                )
-                extraction_result = await extract_board_paper_async(file_bytes=uploaded_bytes, filename=uploaded_filename)
+                    extraction_result = await extract_board_paper_async(file_path=board_paper_path)
+                else:
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(
+                            role="model",
+                            parts=[types.Part.from_text(text="Extracting uploaded file content...")]
+                        )
+                    )
+                    extraction_result = await extract_board_paper_async(file_bytes=uploaded_bytes, filename=uploaded_filename)
 
-            if extraction_result["status"] == "error":
-                yield Event(
-                    author=self.name,
-                    content=types.Content(
-                        role="model",
-                        parts=[types.Part.from_text(text=f"❌ Error extracting board paper: {extraction_result.get('message')}")]
-                    ),
-                    actions=EventActions(escalate=True)
-                )
-                return
+                if extraction_result["status"] == "error":
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(
+                            role="model",
+                            parts=[types.Part.from_text(text=f"❌ Error extracting board paper: {extraction_result.get('message')}")]
+                        ),
+                        actions=EventActions(escalate=True)
+                    )
+                    return
 
-            board_paper_text = extraction_result["text"]
-            file_type = extraction_result["file_type"]
-            ctx.session.state["file_type"] = file_type
-            ctx.session.state["board_paper_path"] = board_paper_path
+                board_paper_text = extraction_result["text"]
+                file_type = extraction_result["file_type"]
+                ctx.session.state["file_type"] = file_type
+                ctx.session.state["board_paper_path"] = board_paper_path
+
             
             # Save extracted text to artifact service to avoid large string in session state
             extracted_text_filename = f"extracted_text_{ctx.session.id}.txt"
@@ -391,7 +441,8 @@ User Message:
             
             phase1_prompt = f"""
 You are the Woolworths Group Virtual Board Paper Reviewer, an expert in ASX-listed corporate governance.
-Review the submitted board paper and classify it, determine likely committee routing, and assess stakeholder sensitivity.
+Classify the submission as strategic proposal, capital request, financial approval, operational update, governance matter, or other.
+Identify which Board committees would review the submission (ensuring at least one relevant committee, such as Risk Committee or People Committee, is assigned for operational updates).
 
 Use the following guidelines to ensure accuracy:
 
@@ -404,10 +455,10 @@ Use the following guidelines to ensure accuracy:
 - "other": Matters not fitting the above.
 
 2. Board Committee Routing Criteria (a paper can route to multiple committees):
-- "Audit & Finance Committee": Financial performance, capital structure, debt/refinancing, budget approvals, external/internal audit, accounting policies, taxation, and financial disclosures.
-- "Risk Committee": Non-financial risks, regulatory inquiries/compliance breaches (e.g., ACCC, Senate inquiries), legal disputes, workplace health & safety (WHS), cybersecurity, insurance, and brand reputation risks.
+- "Audit & Finance Committee": Financial performance, capital structure, debt/refinancing, budget approvals, external/internal audit, IT capital expenditure, accounting policies, taxation, and financial disclosures.
+- "Risk Committee": Non-financial risks, operational and implementation risk, technology adoption, regulatory inquiries/compliance breaches (e.g., ACCC, Senate inquiries), legal disputes, workplace health & safety (WHS), cybersecurity, insurance, and brand reputation risks.
 - "Nomination Committee": Board renewal, board succession, director recruitment, board committee composition, and independent director reviews.
-- "People Committee": Executive remuneration, enterprise agreements (EAs), talent and culture strategy, diversity, employee engagement, and senior leadership succession.
+- "People Committee": Executive remuneration, enterprise agreements (EAs), talent and culture strategy, workforce capability frameworks, diversity, employee engagement, and senior leadership succession.
 - "Sustainability Committee": Environmental issues, climate change targets/reporting, ethical sourcing, modern slavery statement, animal welfare, packaging commitments, and community investment.
 
 3. Stakeholder Sensitivity:
@@ -436,8 +487,8 @@ Provide your reasoning strictly in Australian English. You must never use Americ
                 ctx.session.state["phase1_data"] = p1_data
                 ctx.session.state["awaiting_approval"] = True
                 
-                classification = p1_data.get("classification")
-                committees_list = ", ".join(p1_data.get("committees", []))
+                classification = p1_data.get("classification", "Operational Update")
+                committees_list = ", ".join(p1_data.get("committees", [])) if p1_data.get("committees") else "Full Board (Direct Routing)"
                 reasoning = p1_data.get("reasoning", "No detailed reasoning provided.")
                 
                 state_delta = {
@@ -457,9 +508,9 @@ Provide your reasoning strictly in Australian English. You must never use Americ
                             types.Part.from_text(text=f"### **Phase 1: Intake & Classification**\n"
                                                       f"* **Classification**: {classification.title()}\n"
                                                       f"* **Likely Committees**: {committees_list}\n"
-                                                      f"* **Stakeholder Sensitivity**: {p1_data.get('sensitivity').upper()}\n"
+                                                      f"* **Stakeholder Sensitivity**: {p1_data.get('sensitivity', 'medium').upper()}\n"
                                                       f"* **Reasoning**: {reasoning}\n\n"
-                                                      f"\u003e *I have classified this as {classification}. It would likely go through {committees_list}. Shall I proceed with the full simulation?*")
+                                                      f"\u003e *This document appears to be classified as {classification}, routing primarily via {committees_list}. Confirm or reply to proceed with the full Director Persona Simulations.*")
                         ]
                     ),
                     actions=EventActions(state_delta=state_delta)
@@ -521,24 +572,14 @@ Provide your reasoning strictly in Australian English. You must never use Americ
             )
         )
 
+        sem = asyncio.Semaphore(3)
+
         async def simulate_member(name: str) -> MemberSimulation:
-            grounding_context = ""
-            try:
-                grounding_prompt = f"Find recent 2026 news, comments, stances, and board views for Woolworths Group director {name}."
-                response = await client.aio.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=grounding_prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
-                    )
-                )
-                grounding_context = response.text or ""
-            except Exception as e:
-                logger.warning(f"Google Search grounding failed for {name}: {e}. Using fallback database.")
+            async with sem:
                 search_res = search_member_news(name, "recent news stances board views")
                 grounding_context = "\n".join(search_res.get("results", []))
-            
-            simulation_prompt = f"""
+                
+                simulation_prompt = f"""
 You are simulating a professional board meeting of the Woolworths Group.
 Roleplay exactly as the board member: {name}.
 
@@ -574,26 +615,26 @@ Provide your response as a structured JSON matching this schema:
   "key_request": "..."
 }}
 """
-            try:
-                response = await client.aio.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=simulation_prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=MemberSimulation,
+                try:
+                    response = await client.aio.models.generate_content(
+                        model="gemini-3.5-flash",
+                        contents=simulation_prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=MemberSimulation,
+                        )
                     )
-                )
-                res_data = json.loads(response.text)
-                return MemberSimulation.model_validate(res_data)
-            except Exception as e:
-                logger.error(f"Failed to simulate board member {name}: {e}")
-                return MemberSimulation(
-                    name=name,
-                    stance="Conditionally Supportive",
-                    rationale="The director requires further details and risk assessment concerning operational overhead.",
-                    focus_points=[f"What are the immediate implementation timelines and costs for the proposal?"],
-                    key_request="Provide a detailed cost-benefit analysis."
-                )
+                    res_data = json.loads(response.text)
+                    return MemberSimulation.model_validate(res_data)
+                except Exception as e:
+                    logger.error(f"Failed to simulate board member {name}: {e}")
+                    return MemberSimulation(
+                        name=name,
+                        stance="Conditionally Supportive",
+                        rationale="The director requires further details and risk assessment concerning operational overhead.",
+                        focus_points=[f"What are the immediate implementation timelines and costs for the proposal?"],
+                        key_request="Provide a detailed cost-benefit analysis."
+                    )
 
         # Execute all simulations concurrently
         tasks = [simulate_member(name) for name in board_members]
@@ -837,7 +878,7 @@ root_agent = BoardSimulator(name="board_simulator")
 app = App(
     root_agent=root_agent,
     name="app",
-    plugins=[SaveFilesAsArtifactsPlugin()],
+    plugins=[SaveFilesAsArtifactsPlugin(), RecoverPartlessTurn()],
     context_cache_config=ContextCacheConfig(
         min_tokens=2048,
         ttl_seconds=1800

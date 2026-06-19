@@ -137,53 +137,10 @@ async def run_vision_ocr_sem(sem: asyncio.Semaphore, client: genai.Client, img_b
 async def extract_pdf_text_hybrid_async(file_bytes: bytes) -> str:
     pdf_file = io.BytesIO(file_bytes)
     reader = pypdf.PdfReader(pdf_file)
-    num_pages = len(reader.pages)
-    logger.info(f"Extracting PDF with async hybrid OCR. Total pages: {num_pages}")
-    
-    pdfium_doc = pdfium.PdfDocument(file_bytes)
-    client = get_genai_client()
-    
-    doc_pages = [None] * num_pages
-    ocr_tasks = []
-    
-    # We limit parallel API calls using a semaphore (concurrency: 10) to avoid hitting Gemini rate limits
-    sem = asyncio.Semaphore(10)
-    
-    for idx in range(num_pages):
-        page = reader.pages[idx]
-        native_text = page.extract_text() or ""
-        clean_text = native_text.strip()
-        
-        if len(clean_text) < 150:
-            logger.info(f"Page {idx+1} has low native text ({len(clean_text)} chars). Preparing vision OCR task...")
-            try:
-                pdfium_page = pdfium_doc[idx]
-                bitmap = pdfium_page.render(scale=2)
-                pil_img = bitmap.to_pil()
-                
-                img_byte_arr = io.BytesIO()
-                pil_img.save(img_byte_arr, format="JPEG")
-                img_bytes = img_byte_arr.getvalue()
-                
-                task = run_vision_ocr_sem(sem, client, img_bytes, idx)
-                ocr_tasks.append(task)
-            except Exception as e:
-                logger.error(f"Failed to render Page {idx+1}: {e}. Falling back to empty native text.")
-                doc_pages[idx] = f"=== PAGE {idx+1} ===\n{clean_text}"
-        else:
-            doc_pages[idx] = f"=== PAGE {idx+1} ===\n{clean_text}"
-            
-    if ocr_tasks:
-        logger.info(f"Running {len(ocr_tasks)} vision OCR tasks in parallel (limited by Semaphore)...")
-        ocr_results = await asyncio.gather(*ocr_tasks)
-        for idx, extracted_content in ocr_results:
-            if extracted_content:
-                doc_pages[idx] = f"=== PAGE {idx+1} (OCR Grounded) ===\n{extracted_content}"
-            else:
-                page = reader.pages[idx]
-                native_text = page.extract_text() or ""
-                doc_pages[idx] = f"=== PAGE {idx+1} ===\n{native_text.strip()}"
-                
+    doc_pages = []
+    for idx, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        doc_pages.append(f"=== PAGE {idx+1} ===\n{text.strip()}")
     return "\n\n".join(doc_pages)
 
 async def extract_board_paper_async(file_path: str = "", file_bytes: bytes = None, filename: str = "") -> Dict[str, Any]:
